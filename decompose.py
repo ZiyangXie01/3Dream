@@ -23,8 +23,9 @@ def decompose_image(
     num_layers: int = 4,
     resolution: int = 640,
     device: str = "cuda",
-    num_inference_steps: int = 30,
+    num_inference_steps: int = 50,
     use_compile: bool = True,
+    use_offload: bool = False,
 ) -> List[Image.Image]:
     """
     Decompose an image into multiple layers using QwenImageLayeredPipeline.
@@ -36,6 +37,7 @@ def decompose_image(
         device: Device to use
         num_inference_steps: Number of diffusion steps (lower = faster)
         use_compile: Whether to use torch.compile for acceleration
+        use_offload: Whether to use CPU offloading (use if GPU memory is limited)
         
     Returns:
         List of PIL Images (RGBA), ordered from back (0) to front (N-1)
@@ -63,15 +65,21 @@ def decompose_image(
     
     pipeline = QwenImageLayeredPipeline.from_pretrained(
         "Qwen/Qwen-Image-Layered",
-        torch_dtype=dtype,
+        torch_dtype=dtype if device == "cuda" else torch.float32,
     )
     
     # Move to device
     if device == "cuda":
-        pipeline = pipeline.to(device, dtype)
+        if use_offload:
+            # CPU offloading for limited GPU memory - but generator must still be cuda
+            pipeline.enable_model_cpu_offload()
+            print(f"  Loaded pipeline with CPU offloading (dtype {dtype})")
+        else:
+            pipeline = pipeline.to(device, dtype)
+            print(f"  Loaded pipeline on {device} with dtype {dtype}")
     else:
         pipeline = pipeline.to(device)
-    print(f"  Loaded pipeline on {device}")
+        print(f"  Loaded pipeline on {device}")
     
     # Enable memory efficient attention if available
     try:
@@ -98,9 +106,12 @@ def decompose_image(
     image = Image.open(image_path).convert("RGBA")
     print(f"Input image size: {image.size}")
     
+    # Generator device must match pipeline device (cuda)
+    gen_device = 'cuda' if device == 'cuda' and torch.cuda.is_available() else 'cpu'
+    
     inputs = {
         "image": image,
-        "generator": torch.Generator(device='cpu').manual_seed(777),
+        "generator": torch.Generator(device=gen_device).manual_seed(777),
         "true_cfg_scale": 4.0,
         "negative_prompt": " ",
         "num_inference_steps": num_inference_steps,
@@ -114,19 +125,35 @@ def decompose_image(
     print(f"Decomposing image into {num_layers} layers ({num_inference_steps} steps)...")
     
     with torch.inference_mode():
-        # Use autocast for mixed precision
-        with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
-            output = pipeline(**inputs)
-            layers = output.images[0]
+        output = pipeline(**inputs)
+        layers = output.images[0]
     
     print(f"Generated {len(layers)} layers")
+    
+    # Debug: Check layer values and fix NaN issues
+    import numpy as np
+    fixed_layers = []
+    for i, layer in enumerate(layers):
+        arr = np.array(layer)
+        
+        # Check for NaN/inf values and fix them
+        if not np.isfinite(arr).all():
+            print(f"  Layer {i}: WARNING - contains NaN/inf values, fixing...")
+            arr = np.nan_to_num(arr, nan=0, posinf=255, neginf=0)
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+            layer = Image.fromarray(arr, mode='RGBA')
+        
+        print(f"  Layer {i}: shape={arr.shape}, dtype={arr.dtype}, "
+              f"alpha range=[{arr[:,:,3].min()}, {arr[:,:,3].max()}], "
+              f"rgb range=[{arr[:,:,:3].min()}, {arr[:,:,:3].max()}]")
+        fixed_layers.append(layer)
     
     # Clean up to free memory
     del pipeline
     torch.cuda.empty_cache()
     gc.collect()
     
-    return layers
+    return fixed_layers
 
 
 def composite_layers(

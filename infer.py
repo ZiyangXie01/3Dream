@@ -42,6 +42,7 @@ def process_layered_image(
     trajectory_type: TrajectoryType = "rotate_forward",
     num_frames: int = 60,
     fps: float = 30.0,
+    use_offload: bool = False,
 ) -> Gaussians3D:
     """
     Main pipeline: Decompose image -> predict depth per layer -> combine Gaussians.
@@ -83,6 +84,7 @@ def process_layered_image(
         resolution=resolution,
         device=device,
         num_inference_steps=num_inference_steps,
+        use_offload=use_offload,
     )
     
     # Get dimensions
@@ -90,13 +92,17 @@ def process_layered_image(
     img_height, img_width = first_layer.shape[:2]
     print(f"Layer dimensions: {img_width}x{img_height}")
     
-    # Save intermediate layers
-    if save_intermediate:
-        inter_path = output_path / "layers"
-        inter_path.mkdir(parents=True, exist_ok=True)
-        for i, layer in enumerate(layers):
-            layer.save(inter_path / f"layer_{i}.png")
-            print(f"  Saved layer_{i}.png")
+    # Always save layers to output
+    layers_path = output_path / "layers"
+    layers_path.mkdir(parents=True, exist_ok=True)
+    for i, layer in enumerate(layers):
+        layer.save(layers_path / f"layer_{i}.png")
+        print(f"  Saved layer_{i}.png")
+    
+    # Also save composite of all layers
+    composite_all = composite_layers(layers, len(layers) - 1)
+    composite_all.save(layers_path / "composite_all.png")
+    print(f"  Saved composite_all.png")
     
     # =========================================================================
     # Step 2: Load depth model
@@ -141,8 +147,8 @@ def process_layered_image(
         # Composite layers up to this index
         composite = composite_layers(layers, layer_idx)
         
-        if save_intermediate:
-            composite.save(output_path / "layers" / f"composite_{layer_idx}.png")
+        # Save composite
+        composite.save(output_path / "layers" / f"composite_{layer_idx}.png")
         
         # Predict depth
         print(f"  Predicting depth for composite 0-{layer_idx}...")
@@ -160,14 +166,15 @@ def process_layered_image(
         intrinsics = depth_output['intrinsics']
         
         # Get focal length in pixels
-        focal_px = get_focal_px(intrinsics, img_width)
+        focal_px = get_focal_px(intrinsics, img_width, img_height)
         last_focal_px = focal_px
         
         # Log depth stats
         mask_tensor = torch.from_numpy(layer_mask).to(device)
         valid_depth = depth[mask_tensor]
         print(f"  Depth: [{valid_depth.min().item():.3f}, {valid_depth.max().item():.3f}]")
-        print(f"  Focal: {focal_px:.2f} px")
+        print(f"  Intrinsics fx={intrinsics[0,0].item():.4f}, fy={intrinsics[1,1].item():.4f} (normalized)")
+        print(f"  Focal: {focal_px:.2f} px (from {img_width}x{img_height} image)")
         
         # Get colors from layer (not composite)
         layer_rgb = torch.from_numpy(
@@ -282,7 +289,7 @@ def main():
         help="MoGe resolution level 0-9 (default: 9)"
     )
     parser.add_argument(
-        "--steps", type=int, default=30,
+        "--steps", type=int, default=50,
         help="Diffusion inference steps (default: 30, lower=faster)"
     )
     parser.add_argument(
@@ -310,6 +317,10 @@ def main():
         "--fps", type=float, default=30.0,
         help="Video frame rate (default: 30.0)"
     )
+    parser.add_argument(
+        "--offload", action="store_true",
+        help="Use CPU offloading for limited GPU memory"
+    )
     
     args = parser.parse_args()
     
@@ -328,6 +339,7 @@ def main():
         trajectory_type=args.trajectory,
         num_frames=args.num_frames,
         fps=args.fps,
+        use_offload=args.offload,
     )
 
 

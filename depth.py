@@ -78,21 +78,33 @@ def predict_depth(
     return output
 
 
-def get_focal_px(intrinsics: torch.Tensor, image_width: int) -> float:
+def get_focal_px(intrinsics: torch.Tensor, image_width: int, image_height: int) -> float:
     """
-    Extract focal length in pixels from intrinsics matrix.
+    Extract focal length in pixels from MoGe intrinsics matrix.
+    
+    MoGe returns normalized intrinsics where:
+    - fx, fy are normalized by image width/height respectively
+    - cx, cy are 0.5 (principal point at center)
     
     Args:
-        intrinsics: (3, 3) intrinsics matrix
-        image_width: Image width for normalization
+        intrinsics: (3, 3) intrinsics matrix from MoGe
+        image_width: Image width
+        image_height: Image height
         
     Returns:
-        Focal length in pixels
+        Focal length in pixels (average of fx and fy)
     """
     if intrinsics.dim() == 2:
-        fx = intrinsics[0, 0].item()
-        # Check if normalized (< 1) or pixel units
-        if fx < 1:
-            return fx * image_width
-        return fx
+        # MoGe intrinsics are normalized: fx is relative to width, fy to height
+        fx_normalized = intrinsics[0, 0].item()
+        fy_normalized = intrinsics[1, 1].item()
+        
+        # Convert to pixel units
+        fx_px = fx_normalized * image_width
+        fy_px = fy_normalized * image_height
+        
+        # Return average (they should be very close for square pixels)
+        return (fx_px + fy_px) / 2.0
+    
+    # Fallback for scalar
     return float(intrinsics) * image_width
