@@ -1,0 +1,46 @@
+*.sh
+wandb/
+results/
+checkpoints/
+*.pt
+# Images in data/ might be needed, reconsider ignoring all image types broadly
+# *.png 
+# *.jpg
+# *.jpeg
+# *.gif
+
+# Python specific
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.env
+env/
+venv/
+.venv/
+
+# Data / Checkpoints (already included, kept one)
+data/
+# checkpoints/ 
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# IDE specific
+.vscode/
+.idea/
+output/
+
+# Testing
+.pytest_cache/
+.coverage
+finetune/
+test/
+huggingface_ckpt/
